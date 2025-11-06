@@ -17,7 +17,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 # GitHub 用户名和仓库名
 GITHUB_REPO = "ESVigan/auto-renamer" 
 # 当前版本号，与 GitHub Release 的 tag 名称对应
-CURRENT_VERSION = "v1.42"
+CURRENT_VERSION = "v2.0"
 # 逻辑代码文件名
 APP_LOGIC_FILE = "app_logic.py"
 # --- 配置区结束 ---
