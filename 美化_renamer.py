@@ -10,17 +10,31 @@ import os
 import json
 import requests
 import importlib
+import re
 from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog, QLabel
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 # --- 配置区 ---
 # GitHub 用户名和仓库名
 GITHUB_REPO = "ESVigan/auto-renamer" 
-# 当前版本号，与 GitHub Release 的 tag 名称对应
-CURRENT_VERSION = "v2.0"
 # 逻辑代码文件名
 APP_LOGIC_FILE = "app_logic.py"
 # --- 配置区结束 ---
+
+def get_current_version_from_file(file_path):
+    """从逻辑文件中读取版本号"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # 使用正则表达式查找版本号
+        match = re.search(r'^APP_VERSION\s*=\s*["\'](.*?)["\']', content, re.MULTILINE)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    # 如果找不到，返回一个默认值
+    return "v0.0"
 
 def get_system_proxies():
     """
@@ -168,6 +182,8 @@ def download_and_update(app, download_url, latest_version):
 
 def check_for_updates(app):
     """检查更新并显示提示"""
+    current_version = get_current_version_from_file(APP_LOGIC_FILE)
+
     def on_update_check_result(result):
         if isinstance(result, Exception):
             # 检查更新失败,静默处理,直接启动主程序
@@ -180,12 +196,12 @@ def check_for_updates(app):
             latest_version = result.get('tag_name', '')
             release_notes = result.get('body', '无更新说明')
             
-            if latest_version and latest_version != CURRENT_VERSION:
+            if latest_version and latest_version != current_version:
                 # 有新版本可用
                 msg = QMessageBox()
                 msg.setWindowTitle("发现新版本")
                 msg.setIcon(QMessageBox.Icon.Information)
-                msg.setText(f"发现新版本: {latest_version}\n当前版本: {CURRENT_VERSION}\n\n是否立即下载并更新?")
+                msg.setText(f"发现新版本: {latest_version}\n当前版本: {current_version}\n\n是否立即下载并更新?")
                 msg.setDetailedText(f"更新内容:\n{release_notes}")
                 msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                 msg.setDefaultButton(QMessageBox.StandardButton.Yes)
