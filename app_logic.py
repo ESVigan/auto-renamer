@@ -5,6 +5,10 @@
 现代化界面，专业级用户体验
 """
 
+# --- Application Configuration ---
+APP_VERSION = "v2.0"
+# --- End Configuration ---
+
 import sys
 import os
 import json
@@ -415,7 +419,7 @@ class ModernBatchRenamerApp(QMainWindow):
 
     def init_ui(self):
         """初始化用户界面"""
-        self.setWindowTitle("LPX的批量命名小工具 v1.42")
+        self.setWindowTitle(f"LPX的批量命名小工具 {APP_VERSION}")
         self.setMinimumSize(1200, 900)
         self.resize(1400, 1000)
         
@@ -2829,7 +2833,7 @@ class ModernBatchRenamerApp(QMainWindow):
             if response.status_code == 200:
                 release_data = response.json()
                 latest_version = release_data.get("tag_name", "")
-                current_version = "v1.42"
+                current_version = APP_VERSION
                 
                 if latest_version and latest_version != current_version:
                     # 发现新版本
