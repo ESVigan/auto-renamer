@@ -559,10 +559,16 @@ class ModernBatchRenamerApp(QMainWindow):
         update_history_btn.setMaximumWidth(100)
         update_history_btn.clicked.connect(self.show_update_history)
         
+        check_update_btn = QPushButton("🔍 检查更新")
+        check_update_btn.setObjectName("accentButton")
+        check_update_btn.setMaximumWidth(100)
+        check_update_btn.clicked.connect(self.check_for_updates)
+        
         config_layout.addWidget(save_config_btn)
         config_layout.addWidget(load_config_btn)
         config_layout.addWidget(manage_config_btn)
         config_layout.addWidget(update_history_btn)
+        config_layout.addWidget(check_update_btn)
         
         layout.addLayout(date_layout)
         layout.addLayout(config_layout)
@@ -2802,6 +2808,63 @@ class ModernBatchRenamerApp(QMainWindow):
         current_date = datetime.now().strftime("%y%m%d")
         if self.date_edit.text() != current_date:
             self.date_edit.setText(current_date)
+
+    def check_for_updates(self):
+        """手动检查更新"""
+        from PyQt6.QtWidgets import QProgressDialog
+        import requests
+        
+        # 显示检查进度对话框
+        progress = QProgressDialog("正在检查更新...", "取消", 0, 0, self)
+        progress.setWindowTitle("检查更新")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.show()
+        
+        try:
+            # GitHub API URL
+            api_url = "https://api.github.com/repos/ESVigan/auto-renamer/releases/latest"
+            response = requests.get(api_url, timeout=10)
+            progress.close()
+            
+            if response.status_code == 200:
+                release_data = response.json()
+                latest_version = release_data.get("tag_name", "")
+                current_version = "v1.42"
+                
+                if latest_version and latest_version != current_version:
+                    # 发现新版本
+                    release_notes = release_data.get("body", "暂无更新说明")
+                    message = f"发现新版本：{latest_version}\n"
+                    message += f"当前版本：{current_version}\n\n"
+                    message += f"更新内容：\n{release_notes}\n\n"
+                    message += "是否立即前往GitHub下载？"
+                    
+                    reply = QMessageBox.question(
+                        self, "发现新版本", message,
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.Yes
+                    )
+                    
+                    if reply == QMessageBox.StandardButton.Yes:
+                        import webbrowser
+                        webbrowser.open("https://github.com/ESVigan/auto-renamer/releases/latest")
+                else:
+                    QMessageBox.information(self, "检查更新", "您使用的已是最新版本！")
+            else:
+                QMessageBox.warning(self, "检查更新失败", f"无法连接到更新服务器\n错误代码：{response.status_code}")
+                
+        except requests.exceptions.Timeout:
+            progress.close()
+            QMessageBox.warning(self, "检查更新失败", "连接超时，请检查网络连接")
+        except requests.exceptions.RequestException as e:
+            progress.close()
+            QMessageBox.warning(self, "检查更新失败", f"网络错误：{str(e)}")
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "检查更新失败", f"发生未知错误：{str(e)}")
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "检查更新失败", f"发生未知错误：{str(e)}")
 
     def closeEvent(self, event):
         """窗口关闭事件处理"""

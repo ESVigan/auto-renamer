@@ -14,8 +14,8 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog, QLabel
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 # --- 配置区 ---
-# 请将这里替换为您的 GitHub 用户名和仓库名
-GITHUB_REPO = "YourUsername/YourRepoName" 
+# GitHub 用户名和仓库名
+GITHUB_REPO = "ESVigan/auto-renamer" 
 # 当前版本号，与 GitHub Release 的 tag 名称对应
 CURRENT_VERSION = "v1.42"
 # 逻辑代码文件名
@@ -89,91 +89,52 @@ def run_main_app():
         app.quit()
 
 
+def check_for_updates(app):
+    """检查更新并显示提示"""
+    def on_update_check_result(result):
+        if isinstance(result, Exception):
+            # 检查更新失败,静默处理,直接启动主程序
+            run_main_app()
+            return
+        
+        try:
+            latest_version = result.get('tag_name', '')
+            release_notes = result.get('body', '无更新说明')
+            
+            if latest_version and latest_version != CURRENT_VERSION:
+                # 有新版本可用
+                msg = QMessageBox()
+                msg.setWindowTitle("发现新版本")
+                msg.setIcon(QMessageBox.Icon.Information)
+                msg.setText(f"发现新版本: {latest_version}\n当前版本: {CURRENT_VERSION}")
+                msg.setDetailedText(f"更新内容:\n{release_notes}")
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg.exec()
+            
+            # 无论是否有更新,都启动主程序
+            run_main_app()
+            
+        except Exception:
+            # 解析更新信息失败,直接启动主程序
+            run_main_app()
+    
+    # 创建并启动更新检查线程
+    check_thread = UpdateCheckThread()
+    check_thread.result.connect(on_update_check_result)
+    check_thread.start()
+
+
 def main():
     """启动器主函数"""
     app = QApplication(sys.argv)
 
     # 检查 app_logic.py 是否存在
     if not os.path.exists(APP_LOGIC_FILE):
-        QMessageBox.critical(None, "文件缺失", f"核心逻辑文件 '{APP_LOGIC_FILE}' 不存在，程序无法启动。")
+        QMessageBox.critical(None, "文件缺失", f"核心逻辑文件 '{APP_LOGIC_FILE}' 不存在,程序无法启动。")
         return
 
-    # 创建一个临时的加载提示窗口
-    loading_label = QLabel("正在检查更新，请稍候...")
-    loading_label.setWindowFlags(Qt.WindowType.SplashScreen | Qt.WindowType.FramelessWindowHint)
-    loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    loading_label.setStyleSheet("background-color: #f0f0f0; color: #333; font-size: 16px; padding: 20px; border-radius: 10px;")
-    loading_label.show()
-    app.processEvents()
-
-    update_checker = UpdateCheckThread()
-
-    def on_update_check_finished(result):
-        loading_label.close()
-        if isinstance(result, dict):
-            latest_version = result.get("tag_name")
-            if latest_version and latest_version != CURRENT_VERSION:
-                reply = QMessageBox.question(None, "发现新版本", 
-                                             f"检测到新版本 {latest_version}！\n您当前的版本是 {CURRENT_VERSION}。\n\n是否立即更新？",
-                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-                if reply == QMessageBox.StandardButton.Yes:
-                    handle_download(result)
-                else:
-                    run_main_app()
-            else:
-                run_main_app()
-        else:
-            # 检查更新失败，直接启动主程序
-            print(f"检查更新失败: {result}")
-            run_main_app()
-
-    def handle_download(release_data):
-        assets = release_data.get("assets", [])
-        download_url = None
-        for asset in assets:
-            if asset.get("name") == APP_LOGIC_FILE:
-                download_url = asset.get("browser_download_url")
-                break
-        
-        if not download_url:
-            QMessageBox.warning(None, "更新失败", f"在版本 {release_data.get('tag_name')} 中未找到 '{APP_LOGIC_FILE}' 文件。")
-            run_main_app()
-            return
-
-        progress_dialog = QProgressDialog("正在下载更新...", "取消", 0, 100)
-        progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        progress_dialog.setWindowTitle("更新")
-        progress_dialog.show()
-
-        downloader = DownloaderThread(download_url, APP_LOGIC_FILE)
-        
-        def on_download_progress(percent):
-            progress_dialog.setValue(percent)
-
-        def on_download_finished(status, message):
-            progress_dialog.close()
-            if status == "success":
-                QMessageBox.information(None, "更新完成", "程序已更新到最新版本，即将重启。")
-                # 重启应用程序的逻辑
-                QApplication.quit()
-                # 在Windows上，os.execv会替换当前进程
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-            else:
-                QMessageBox.critical(None, "更新失败", message)
-                run_main_app()
-
-        downloader.progress.connect(on_download_progress)
-        downloader.finished.connect(on_download_finished)
-        
-        # 保持 downloader 对象的引用
-        app.downloader = downloader
-        downloader.start()
-
-    update_checker.result.connect(on_update_check_finished)
-    # 保持 update_checker 对象的引用
-    app.update_checker = update_checker
-    update_checker.start()
-    
+    # 启动时检查更新
+    check_for_updates(app)
     sys.exit(app.exec())
 
 

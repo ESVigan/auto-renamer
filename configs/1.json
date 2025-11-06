@@ -1,0 +1,46 @@
+{
+  "date": "251106",
+  "project_codes": [
+    {
+      "code": "内心斗争-L1",
+      "name": "pre-shoot-内心斗争-L1"
+    },
+    {
+      "code": "1",
+      "name": "1"
+    }
+  ],
+  "diff_rules": [
+    {
+      "diff": "5",
+      "connector": "+",
+      "full_name": "麻将堆叠-完成订单-急促-超市",
+      "abbr": "mt",
+      "lang": "en"
+    },
+    {
+      "diff": "6",
+      "connector": "-",
+      "full_name": "滑动三消",
+      "abbr": "vm",
+      "lang": "en"
+    },
+    {
+      "diff": "7",
+      "connector": "-",
+      "full_name": "无语言蔬菜一笔画全消平铺目标感-tilefruit",
+      "abbr": "tt",
+      "lang": "en"
+    },
+    {
+      "diff": "1",
+      "connector": "+",
+      "full_name": "1",
+      "abbr": "",
+      "lang": ""
+    }
+  ],
+  "ignore_list": [
+    "111"
+  ]
+}
