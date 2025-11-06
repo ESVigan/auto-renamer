@@ -95,6 +95,8 @@ def check_for_updates(app):
         if isinstance(result, Exception):
             # 检查更新失败,静默处理,直接启动主程序
             run_main_app()
+            # 等待线程结束
+            check_thread.wait()
             return
         
         try:
@@ -117,10 +119,15 @@ def check_for_updates(app):
         except Exception:
             # 解析更新信息失败,直接启动主程序
             run_main_app()
+        finally:
+            # 等待线程结束
+            check_thread.wait()
     
     # 创建并启动更新检查线程
     check_thread = UpdateCheckThread()
     check_thread.result.connect(on_update_check_result)
+    # 将线程存储为app的属性,防止被垃圾回收
+    app.update_check_thread = check_thread
     check_thread.start()
 
 

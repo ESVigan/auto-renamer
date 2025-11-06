@@ -42,6 +42,27 @@ Thumbs.db
 # Test files
 test_files/
 test_edit_files/
+test_*.py
+
+# Node.js and web projects
+node_modules/
+open-in-v0/
+美化/
+
+# PyQt UI files
+pyqt接收从外部拖入的文件/
+
+# Build artifacts
+*.spec
+build/
+dist/
+
+# Other Python scripts (keep only core files)
+web_scraper.py
+selenium_scraper.py
+batch_renamer.py
+batch_renamer_v4.py
+batch_renamer_pyqt.py
 
 # Temporary files
 *.tmp
