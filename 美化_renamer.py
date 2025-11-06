@@ -22,6 +22,45 @@ CURRENT_VERSION = "v1.42"
 APP_LOGIC_FILE = "app_logic.py"
 # --- 配置区结束 ---
 
+def get_system_proxies():
+    """
+    获取系统代理设置
+    优先使用环境变量中的代理设置,如果没有则尝试使用常见的本地代理端口
+    """
+    import os
+    
+    # 1. 尝试从环境变量获取代理
+    http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
+    https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
+    
+    if http_proxy or https_proxy:
+        return {
+            'http': http_proxy,
+            'https': https_proxy or http_proxy
+        }
+    
+    # 2. 尝试常见的本地代理端口
+    common_ports = [7897, 7890, 10809, 1080, 8080]
+    for port in common_ports:
+        try:
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.1)
+            result = sock.connect_ex(('127.0.0.1', port))
+            sock.close()
+            if result == 0:
+                # 端口开放,使用这个代理
+                proxy_url = f"http://127.0.0.1:{port}"
+                return {
+                    'http': proxy_url,
+                    'https': proxy_url
+                }
+        except:
+            continue
+    
+    # 3. 没有找到代理,返回None(直接连接)
+    return None
+
 class UpdateCheckThread(QThread):
     """在后台线程中检查更新"""
     result = pyqtSignal(object)
@@ -29,7 +68,8 @@ class UpdateCheckThread(QThread):
     def run(self):
         try:
             api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-            response = requests.get(api_url, timeout=5)
+            proxies = get_system_proxies()
+            response = requests.get(api_url, proxies=proxies, timeout=5)
             response.raise_for_status()
             self.result.emit(response.json())
         except Exception as e:
@@ -47,7 +87,8 @@ class DownloaderThread(QThread):
 
     def run(self):
         try:
-            response = requests.get(self.url, stream=True, timeout=15)
+            proxies = get_system_proxies()
+            response = requests.get(self.url, stream=True, proxies=proxies, timeout=15)
             response.raise_for_status()
             
             total_size = int(response.headers.get('content-length', 0))
