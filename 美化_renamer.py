@@ -25,40 +25,14 @@ APP_LOGIC_FILE = "app_logic.py"
 def get_system_proxies():
     """
     获取系统代理设置
-    优先使用环境变量中的代理设置,如果没有则尝试使用常见的本地代理端口
+    requests库会自动读取系统环境变量中的代理设置:
+    - HTTP_PROXY / http_proxy
+    - HTTPS_PROXY / https_proxy
+    - NO_PROXY / no_proxy
+    
+    返回None表示使用requests的默认行为(自动检测系统代理)
     """
-    import os
-    
-    # 1. 尝试从环境变量获取代理
-    http_proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
-    https_proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
-    
-    if http_proxy or https_proxy:
-        return {
-            'http': http_proxy,
-            'https': https_proxy or http_proxy
-        }
-    
-    # 2. 尝试常见的本地代理端口
-    common_ports = [7897, 7890, 10809, 1080, 8080]
-    for port in common_ports:
-        try:
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(0.1)
-            result = sock.connect_ex(('127.0.0.1', port))
-            sock.close()
-            if result == 0:
-                # 端口开放,使用这个代理
-                proxy_url = f"http://127.0.0.1:{port}"
-                return {
-                    'http': proxy_url,
-                    'https': proxy_url
-                }
-        except:
-            continue
-    
-    # 3. 没有找到代理,返回None(直接连接)
+    # 返回None让requests自动使用系统代理
     return None
 
 class UpdateCheckThread(QThread):
@@ -130,6 +104,68 @@ def run_main_app():
         app.quit()
 
 
+def download_and_update(app, download_url, latest_version):
+    """下载并应用更新"""
+    # 创建进度对话框
+    progress = QProgressDialog("正在下载更新...", "取消", 0, 100, None)
+    progress.setWindowTitle("下载更新")
+    progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+    progress.setMinimumDuration(0)
+    progress.setValue(0)
+    progress.show()
+    
+    # 下载文件保存路径
+    import tempfile
+    temp_file = os.path.join(tempfile.gettempdir(), f"update_{latest_version}.py")
+    
+    def on_download_progress(percent):
+        progress.setValue(percent)
+    
+    def on_download_finished(status, message):
+        progress.close()
+        download_thread.wait()
+        
+        if status == "success":
+            try:
+                # 备份当前文件
+                backup_file = APP_LOGIC_FILE + ".backup"
+                if os.path.exists(APP_LOGIC_FILE):
+                    import shutil
+                    shutil.copy2(APP_LOGIC_FILE, backup_file)
+                
+                # 替换文件
+                import shutil
+                shutil.move(message, APP_LOGIC_FILE)
+                
+                # 显示成功消息
+                msg = QMessageBox()
+                msg.setWindowTitle("更新成功")
+                msg.setIcon(QMessageBox.Icon.Information)
+                msg.setText(f"已成功更新到版本 {latest_version}!")
+                msg.setInformativeText("程序将重新启动以应用更新。")
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+                msg.exec()
+                
+                # 重启程序
+                import subprocess
+                subprocess.Popen([sys.executable] + sys.argv)
+                sys.exit(0)
+                
+            except Exception as e:
+                QMessageBox.critical(None, "更新失败", f"应用更新时出错:\n{e}\n\n已保留备份文件: {backup_file}")
+                run_main_app()
+        else:
+            QMessageBox.warning(None, "下载失败", f"无法下载更新:\n{message}\n\n将继续使用当前版本。")
+            run_main_app()
+    
+    # 创建下载线程
+    download_thread = DownloaderThread(download_url, temp_file)
+    download_thread.progress.connect(on_download_progress)
+    download_thread.finished.connect(on_download_finished)
+    app.download_thread = download_thread
+    download_thread.start()
+
+
 def check_for_updates(app):
     """检查更新并显示提示"""
     def on_update_check_result(result):
@@ -149,13 +185,35 @@ def check_for_updates(app):
                 msg = QMessageBox()
                 msg.setWindowTitle("发现新版本")
                 msg.setIcon(QMessageBox.Icon.Information)
-                msg.setText(f"发现新版本: {latest_version}\n当前版本: {CURRENT_VERSION}")
+                msg.setText(f"发现新版本: {latest_version}\n当前版本: {CURRENT_VERSION}\n\n是否立即下载并更新?")
                 msg.setDetailedText(f"更新内容:\n{release_notes}")
-                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-                msg.exec()
-            
-            # 无论是否有更新,都启动主程序
-            run_main_app()
+                msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+                
+                reply = msg.exec()
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    # 用户选择更新,查找下载链接
+                    assets = result.get('assets', [])
+                    download_url = None
+                    
+                    # 查找app_logic.py文件
+                    for asset in assets:
+                        if asset.get('name') == 'app_logic.py':
+                            download_url = asset.get('browser_download_url')
+                            break
+                    
+                    if download_url:
+                        download_and_update(app, download_url, latest_version)
+                    else:
+                        QMessageBox.warning(None, "无法更新", "未找到更新文件,请手动下载更新。\n\n将继续使用当前版本。")
+                        run_main_app()
+                else:
+                    # 用户选择稍后更新
+                    run_main_app()
+            else:
+                # 无更新,直接启动主程序
+                run_main_app()
             
         except Exception:
             # 解析更新信息失败,直接启动主程序
