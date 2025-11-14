@@ -6,7 +6,7 @@
 """
 
 # --- Application Configuration ---
-APP_VERSION = "v2.1"
+APP_VERSION = "v2.3"
 # --- End Configuration ---
 
 import sys
@@ -382,7 +382,9 @@ class ModernBatchRenamerApp(QMainWindow):
         self.memory_bank = {
             "version_names": set(),
             "abbreviations": set(),
-            "languages": set()
+            "languages": set(),
+            "connectors": set(['+', '-']),
+            "diff_numbers": set()
         }
 
         # 初始化界面
@@ -416,6 +418,20 @@ class ModernBatchRenamerApp(QMainWindow):
         undo_action.setShortcut(QKeySequence.StandardKey.Undo)  # Ctrl+Z
         undo_action.triggered.connect(self.undo_last_action)
         self.addAction(undo_action)
+
+        delete_action = QAction("删除选中行", self)
+        delete_action.setShortcut(QKeySequence.StandardKey.Delete)
+        delete_action.triggered.connect(self.delete_selected_rows_by_focus)
+        self.addAction(delete_action)
+
+    def delete_selected_rows_by_focus(self):
+        widget = QApplication.focusWidget()
+        if widget is self.rules_table:
+            self.remove_selected_rows(self.rules_table)
+        elif widget is self.project_table:
+            self.remove_selected_rows(self.project_table)
+        elif widget is self.file_table:
+            self.remove_selected_rows(self.file_table)
 
     def init_ui(self):
         """初始化用户界面"""
@@ -1238,6 +1254,7 @@ class ModernBatchRenamerApp(QMainWindow):
             "data": deleted_data
         })
         self.log_history(f"🗑️ 从 {table.objectName()} 中删除了 {len(deleted_data)} 行\n")
+        self.renumber_table_rows(table)
 
     def undo_last_action(self):
         """撤销上一步操作"""
@@ -1259,6 +1276,7 @@ class ModernBatchRenamerApp(QMainWindow):
                     for col, text in enumerate(data):
                         table.setItem(row, col, CustomTableWidgetItem(text))
                 self.log_history(f"⏪ 撤销删除操作，恢复了 {len(deleted_data)} 行\n")
+                self.renumber_table_rows(table)
         
         # 未来可以扩展其他撤销操作
         # elif last_action["action"] == "rename":
@@ -1292,8 +1310,6 @@ class ModernBatchRenamerApp(QMainWindow):
 
         for line in lines:
             line = line.strip()
-            if not (line.lower().startswith("pre-shoot-") or line.lower().startswith("pre-kol-")):
-                continue
 
             matched_rule = None
             original_rule_in_line = None
@@ -1338,13 +1354,11 @@ class ModernBatchRenamerApp(QMainWindow):
 
             project_prefix = prefix_part[:-1]
             
-            # 从项目前缀中提取项目代号
-            # 逻辑：从 "pre-shoot-" 或 "pre-kol-" 之后开始提取
-            code_match = re.search(r'pre-(?:shoot|kol)-(.*)', project_prefix)
-            if not code_match:
-                continue
-            
-            project_code = code_match.group(1).strip()
+            code_match = re.search(r'(?:pre-)?(?:shoot|kol)-(.*)', project_prefix, flags=re.IGNORECASE)
+            if code_match:
+                project_code = code_match.group(1).strip()
+            else:
+                project_code = project_prefix.strip()
             
             # 应用忽略规则
             for ignored in ignore_list:
@@ -1394,7 +1408,7 @@ class ModernBatchRenamerApp(QMainWindow):
                 
                 if diff and full and abbr and lang:
                     self.diff_rules[diff] = (connector, full, abbr, lang)
-                    self.update_memory_bank(full, abbr, lang)
+                    self.update_memory_bank(full, abbr, lang, connector, diff)
 
     def add_files(self):
         """添加文件"""
@@ -2105,6 +2119,21 @@ class ModernBatchRenamerApp(QMainWindow):
     def show_update_history(self):
         """显示更新历史对话框"""
         update_log = {
+            "2.3": [
+                "【统一】更新路径统一为仅下载并覆盖 app_logic.py，不区分打包/源码",
+                "【兜底】启动时缺失自动下载到可写目录并加载（exe 同目录或用户目录）",
+                "【优先级】外部 app_logic.py 优先加载，无法写入时自动回退",
+                "【校验】支持从 Release 读取 app_logic.sha256 进行 SHA256 校验",
+                "【移除】删除 .exe 下载更新逻辑与相关提示",
+            ],
+            "2.2": [
+                "【修复】导入解析支持大小写与可选前缀：接受 pre-shoot/shoot 与 pre-kol/kol，未识别前缀时保留原内容作为代号",
+                "【优化】取消项目名按前缀筛选：只要命中差分规则且连接符紧邻即可导入",
+                "【修复】差分规则表右键菜单列索引错位：列3/4/5 对应 全称/缩写/语言",
+                "【新增】全局快捷键 Delete：删除当前焦点表的选中行（支持撤销）",
+                "【优化】删除/撤销后统一 # 列编号与居中样式，视觉一致",
+                "【新增】右键常用项扩展：差分号（列1）与连接符（列2），连接符包含默认 +/−",
+            ],
             "2.1": [
                 "【新增】更新日志内置化：现在“更新历史”将直接展示在本程序中，并随版本更新。",
                 "【重构】版本号管理机制：统一了版本号来源，为后续更稳定的更新奠定基础。"
@@ -2524,7 +2553,9 @@ class ModernBatchRenamerApp(QMainWindow):
                 self.memory_bank = {
                     "version_names": set(data.get("version_names", [])),
                     "abbreviations": set(data.get("abbreviations", [])),
-                    "languages": set(data.get("languages", []))
+                    "languages": set(data.get("languages", [])),
+                    "connectors": set(data.get("connectors", ['+', '-'])),
+                    "diff_numbers": set(data.get("diff_numbers", []))
                 }
                 print("记忆库加载成功")
         except Exception as e:
@@ -2533,7 +2564,9 @@ class ModernBatchRenamerApp(QMainWindow):
             self.memory_bank = {
                 "version_names": set(),
                 "abbreviations": set(),
-                "languages": set()
+                "languages": set(),
+                "connectors": set(['+', '-']),
+                "diff_numbers": set()
             }
 
     def save_memory_bank(self):
@@ -2543,7 +2576,9 @@ class ModernBatchRenamerApp(QMainWindow):
             data = {
                 "version_names": list(self.memory_bank["version_names"]),
                 "abbreviations": list(self.memory_bank["abbreviations"]),
-                "languages": list(self.memory_bank["languages"])
+                "languages": list(self.memory_bank["languages"]),
+                "connectors": list(self.memory_bank["connectors"]),
+                "diff_numbers": list(self.memory_bank["diff_numbers"])
             }
             
             with open(self.memory_bank_file, 'w', encoding='utf-8') as f:
@@ -2552,7 +2587,7 @@ class ModernBatchRenamerApp(QMainWindow):
         except Exception as e:
             print(f"保存记忆库失败: {e}")
 
-    def update_memory_bank(self, full_name, abbr, lang):
+    def update_memory_bank(self, full_name, abbr, lang, connector="", diff=""):
         """更新记忆库"""
         if full_name.strip():
             self.memory_bank["version_names"].add(full_name.strip())
@@ -2560,6 +2595,10 @@ class ModernBatchRenamerApp(QMainWindow):
             self.memory_bank["abbreviations"].add(abbr.strip())
         if lang.strip():
             self.memory_bank["languages"].add(lang.strip())
+        if connector.strip():
+            self.memory_bank["connectors"].add(connector.strip())
+        if diff.strip():
+            self.memory_bank["diff_numbers"].add(diff.strip())
         
         # 移除自动保存，只在关闭软件时保存
         # self.save_memory_bank()
@@ -2573,28 +2612,40 @@ class ModernBatchRenamerApp(QMainWindow):
         row = item.row()
         column = item.column()
         
-        # 只在版本名全称(2)、版本名缩写(3)、语言(4)列显示菜单
-        if column not in [2, 3, 4]:
+        # 只在版本名全称(3)、版本名缩写(4)、语言(5)列显示菜单
+        if column not in [1, 2, 3, 4, 5]:
             return
         
         # 创建右键菜单
         menu = QMenu(self)
         
         # 根据列确定菜单项
-        if column == 2:
+        if column == 1:
+            memory_data = list(self.memory_bank["diff_numbers"])
+            menu_title = "🔢 选择差分号"
+        elif column == 2:
+            memory_data = list(self.memory_bank["connectors"])
+            menu_title = "选择连接符"
+        elif column == 3:
             memory_data = list(self.memory_bank["version_names"])
             menu_title = "📝 选择版本名全称"
-        elif column == 3:
+        elif column == 4:
             memory_data = list(self.memory_bank["abbreviations"])
             menu_title = "🔤 选择版本名缩写"
-        elif column == 4:
+        elif column == 5:
             memory_data = list(self.memory_bank["languages"])
             menu_title = "🌐 选择语言"
         
         if not memory_data:
-            no_data_action = QAction("💡 记忆库中暂无数据", self)
-            no_data_action.setEnabled(False)
-            menu.addAction(no_data_action)
+            if column == 2:
+                for data in ['+', '-']:
+                    action = QAction(data, self)
+                    action.triggered.connect(lambda checked, value=data: self.set_cell_value(row, column, value))
+                    menu.addAction(action)
+            else:
+                no_data_action = QAction("💡 记忆库中暂无数据", self)
+                no_data_action.setEnabled(False)
+                menu.addAction(no_data_action)
         else:
             title_action = QAction(menu_title, self)
             title_action.setEnabled(False)
@@ -2652,25 +2703,29 @@ class ModernBatchRenamerApp(QMainWindow):
             self.rules_table.setItem(row, column, QTableWidgetItem(value))
     
     def show_memory_dialog_for_cell(self, row, column):
-        """为特定单元格显示记忆库对话框"""
-        # 获取对应的记忆库数据
-        if column == 2:  # 版本名全称
+        if column == 1:
+            memory_data = list(self.memory_bank["diff_numbers"])
+            title = "选择差分号"
+        elif column == 2:
+            memory_data = list(self.memory_bank["connectors"])
+            title = "选择连接符"
+        elif column == 3:
             memory_data = list(self.memory_bank["version_names"])
             title = "选择版本名全称"
-        elif column == 3:  # 版本名缩写
+        elif column == 4:
             memory_data = list(self.memory_bank["abbreviations"])
             title = "选择版本名缩写"
-        elif column == 4:  # 语言
+        elif column == 5:
             memory_data = list(self.memory_bank["languages"])
             title = "选择语言"
         else:
             return
-        
         if not memory_data:
-            QMessageBox.information(self, "提示", "记忆库中暂无相关数据")
-            return
-        
-        # 显示选择对话框
+            if column == 2:
+                memory_data = ['+', '-']
+            else:
+                QMessageBox.information(self, "提示", "记忆库中暂无相关数据")
+                return
         selected_value = self.show_memory_dialog(title, memory_data)
         if selected_value:
             self.set_cell_value(row, column, selected_value)
@@ -2681,6 +2736,13 @@ class ModernBatchRenamerApp(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             return dialog.get_selected_value()
         return None
+
+    def renumber_table_rows(self, table: QTableWidget):
+        for i in range(table.rowCount()):
+            item = CustomTableWidgetItem(str(i + 1))
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(i, 0, item)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         """处理拖拽进入事件"""
@@ -2823,62 +2885,125 @@ class ModernBatchRenamerApp(QMainWindow):
             self.date_edit.setText(current_date)
 
     def check_for_updates(self):
-        """手动检查更新"""
         from PyQt6.QtWidgets import QProgressDialog
         import requests
+        import tempfile
+        import shutil
+        import subprocess
+        import re
+        import sys
+        import webbrowser
+        try:
+            import certifi
+            p = certifi.where()
+            os.environ["SSL_CERT_FILE"] = p
+            os.environ["REQUESTS_CA_BUNDLE"] = p
+        except Exception:
+            pass
         
-        # 显示检查进度对话框
         progress = QProgressDialog("正在检查更新...", "取消", 0, 0, self)
         progress.setWindowTitle("检查更新")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.show()
         
+        def normalize_version(s: str):
+            s = (s or "").strip()
+            if s[:1].lower() == "v":
+                s = s[1:]
+            parts = s.split(".")
+            nums = []
+            for p in parts:
+                m = re.sub(r"[^0-9]", "", p)
+                nums.append(int(m) if m.isdigit() else 0)
+            while len(nums) < 3:
+                nums.append(0)
+            return tuple(nums[:3])
+        
         try:
-            # GitHub API URL
             api_url = "https://api.github.com/repos/ESVigan/auto-renamer/releases/latest"
             response = requests.get(api_url, timeout=10)
-            progress.close()
-            
-            if response.status_code == 200:
-                release_data = response.json()
-                latest_version = release_data.get("tag_name", "")
-                current_version = APP_VERSION
-                
-                if latest_version and latest_version != current_version:
-                    # 发现新版本
-                    release_notes = release_data.get("body", "暂无更新说明")
-                    message = f"发现新版本：{latest_version}\n"
-                    message += f"当前版本：{current_version}\n\n"
-                    message += f"更新内容：\n{release_notes}\n\n"
-                    message += "是否立即前往GitHub下载？"
-                    
-                    reply = QMessageBox.question(
-                        self, "发现新版本", message,
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                        QMessageBox.StandardButton.Yes
-                    )
-                    
-                    if reply == QMessageBox.StandardButton.Yes:
-                        import webbrowser
-                        webbrowser.open("https://github.com/ESVigan/auto-renamer/releases/latest")
-                else:
-                    QMessageBox.information(self, "检查更新", "您使用的已是最新版本！")
-            else:
+            if response.status_code != 200:
+                progress.close()
                 QMessageBox.warning(self, "检查更新失败", f"无法连接到更新服务器\n错误代码：{response.status_code}")
-                
+                return
+            release_data = response.json()
+            latest_version = release_data.get("tag_name", "")
+            current_version = APP_VERSION
+            lv = normalize_version(latest_version)
+            cv = normalize_version(current_version)
+            if lv <= cv:
+                progress.close()
+                QMessageBox.information(self, "检查更新", "您使用的已是最新版本！")
+                return
+            progress.close()
+            release_notes = release_data.get("body", "暂无更新说明")
+            message = f"发现新版本：{latest_version}\n"
+            message += f"当前版本：{current_version}\n\n"
+            message += f"更新内容：\n{release_notes}\n\n"
+            message += "是否立即下载并更新？"
+            reply = QMessageBox.question(
+                self, "发现新版本", message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            # 打包版同样执行 app_logic.py 下载更新
+            assets = release_data.get("assets", [])
+            download_url = None
+            for asset in assets:
+                if asset.get("name") == "app_logic.py":
+                    download_url = asset.get("browser_download_url")
+                    break
+            if not download_url:
+                download_url = "https://raw.githubusercontent.com/ESVigan/auto-renamer/main/app_logic.py"
+            
+            dprog = QProgressDialog("正在下载更新...", "取消", 0, 100, self)
+            dprog.setWindowTitle("下载更新")
+            dprog.setWindowModality(Qt.WindowModality.WindowModal)
+            dprog.setMinimumDuration(0)
+            dprog.setValue(0)
+            dprog.show()
+            temp_file = os.path.join(tempfile.gettempdir(), f"update_{latest_version}.py")
+            try:
+                with requests.get(download_url, stream=True, timeout=30) as r:
+                    r.raise_for_status()
+                    total = int(r.headers.get("content-length", 0))
+                    done = 0
+                    with open(temp_file, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=8192):
+                            if not chunk:
+                                continue
+                            f.write(chunk)
+                            done += len(chunk)
+                            if total > 0:
+                                dprog.setValue(int(done * 100 / total))
+                dprog.close()
+            except Exception as e:
+                dprog.close()
+                QMessageBox.warning(self, "下载失败", f"无法下载更新:\n{e}")
+                return
+            try:
+                base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(__file__)
+                target_file = os.path.join(base_dir, "app_logic.py")
+                backup_file = target_file + ".backup"
+                if os.path.exists(target_file):
+                    shutil.copy2(target_file, backup_file)
+                shutil.move(temp_file, target_file)
+                QMessageBox.information(self, "更新成功", f"已成功更新到版本 {latest_version}! 程序将重启。")
+                subprocess.Popen([sys.executable] + sys.argv)
+                QApplication.instance().quit()
+            except Exception as e:
+                QMessageBox.critical(self, "更新失败", f"应用更新时出错:\n{e}\n\n已保留备份文件: {backup_file}")
         except requests.exceptions.Timeout:
             progress.close()
             QMessageBox.warning(self, "检查更新失败", "连接超时，请检查网络连接")
         except requests.exceptions.RequestException as e:
             progress.close()
-            QMessageBox.warning(self, "检查更新失败", f"网络错误：{str(e)}")
+            QMessageBox.warning(self, "检查更新失败", f"网络错误：{e}")
         except Exception as e:
             progress.close()
-            QMessageBox.critical(self, "检查更新失败", f"发生未知错误：{str(e)}")
-        except Exception as e:
-            progress.close()
-            QMessageBox.critical(self, "检查更新失败", f"发生未知错误：{str(e)}")
-
+            QMessageBox.critical(self, "检查更新失败", f"发生未知错误：{e}")
     def closeEvent(self, event):
         """窗口关闭事件处理"""
         # 强制提交任何正在编辑的单元格，以防数据丢失
