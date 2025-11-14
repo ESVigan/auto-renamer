@@ -11,6 +11,7 @@ import json
 import requests
 import importlib
 import re
+import hashlib
 from PyQt6.QtWidgets import QApplication, QMessageBox, QProgressDialog, QLabel
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
@@ -21,19 +22,21 @@ GITHUB_REPO = "ESVigan/auto-renamer"
 APP_LOGIC_FILE = "app_logic.py"
 # --- 配置区结束 ---
 
-def get_current_version_from_file(file_path):
-    """从逻辑文件中读取版本号"""
+def get_current_version():
+    """获取当前版本号，优先从模块变量读取，回退读取文件"""
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        from app_logic import APP_VERSION
+        return APP_VERSION
+    except Exception:
+        pass
+    try:
+        with open(APP_LOGIC_FILE, 'r', encoding='utf-8') as f:
             content = f.read()
-        
-        # 使用正则表达式查找版本号
         match = re.search(r'^APP_VERSION\s*=\s*["\'](.*?)["\']', content, re.MULTILINE)
         if match:
             return match.group(1)
     except Exception:
         pass
-    # 如果找不到，返回一个默认值
     return "v0.0"
 
 def get_system_proxies():
@@ -48,6 +51,19 @@ def get_system_proxies():
     """
     # 返回None让requests自动使用系统代理
     return None
+
+def normalize_version(s: str):
+    s = (s or "").strip()
+    if s[:1].lower() == "v":
+        s = s[1:]
+    parts = s.split(".")
+    nums = []
+    for p in parts:
+        m = re.sub(r"[^0-9]", "", p)
+        nums.append(int(m) if m.isdigit() else 0)
+    while len(nums) < 3:
+        nums.append(0)
+    return tuple(nums[:3])
 
 class UpdateCheckThread(QThread):
     """在后台线程中检查更新"""
@@ -100,14 +116,22 @@ def run_main_app():
     """动态加载并运行主程序"""
     app = QApplication.instance()
     try:
-        # 确保 app_logic 模块被重新加载
-        if APP_LOGIC_FILE.replace('.py', '') in sys.modules:
-            importlib.reload(sys.modules[APP_LOGIC_FILE.replace('.py', '')])
-        
-        from app_logic import ModernBatchRenamerApp
-        
-        # 将主窗口存储为app的属性，以防止其被垃圾回收
-        app.main_window = ModernBatchRenamerApp()
+        module = None
+        # 加载顺序：exe同目录 -> 用户目录 -> 内置模块
+        base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+        user_dir = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'AutoRenamer')
+        for candidate_dir in [base_dir, user_dir]:
+            candidate = os.path.join(candidate_dir, APP_LOGIC_FILE)
+            if os.path.exists(candidate):
+                spec = importlib.util.spec_from_file_location('app_logic', candidate)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                break
+        if module is None:
+            if APP_LOGIC_FILE.replace('.py', '') in sys.modules:
+                importlib.reload(sys.modules[APP_LOGIC_FILE.replace('.py', '')])
+            import app_logic as module
+        app.main_window = module.ModernBatchRenamerApp()
         app.main_window.show()
 
     except ImportError:
@@ -118,7 +142,14 @@ def run_main_app():
         app.quit()
 
 
-def download_and_update(app, download_url, latest_version):
+def compute_sha256(file_path):
+    h = hashlib.sha256()
+    with open(file_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+def download_and_update(app, download_url, latest_version, expected_sha256: str | None = None):
     """下载并应用更新"""
     # 创建进度对话框
     progress = QProgressDialog("正在下载更新...", "取消", 0, 100, None)
@@ -141,15 +172,35 @@ def download_and_update(app, download_url, latest_version):
         
         if status == "success":
             try:
-                # 备份当前文件
-                backup_file = APP_LOGIC_FILE + ".backup"
-                if os.path.exists(APP_LOGIC_FILE):
+                if expected_sha256:
+                    actual = compute_sha256(message)
+                    if actual.lower() != expected_sha256.lower():
+                        raise RuntimeError(f"SHA256 校验失败\n期待: {expected_sha256}\n实际: {actual}")
+                target = APP_LOGIC_FILE
+                if getattr(sys, 'frozen', False):
+                    base_dir = os.path.dirname(sys.executable)
+                    # 判断目录可写性，决定落地到exe目录还是用户目录
+                    def dir_writable(d):
+                        try:
+                            test = os.path.join(d, ".write_test")
+                            with open(test, 'w', encoding='utf-8') as tf:
+                                tf.write("ok")
+                            os.remove(test)
+                            return True
+                        except Exception:
+                            return False
+                    if dir_writable(base_dir):
+                        target = os.path.join(base_dir, APP_LOGIC_FILE)
+                    else:
+                        user_dir = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'AutoRenamer')
+                        os.makedirs(user_dir, exist_ok=True)
+                        target = os.path.join(user_dir, APP_LOGIC_FILE)
+                backup_file = target + ".backup"
+                if os.path.exists(target):
                     import shutil
-                    shutil.copy2(APP_LOGIC_FILE, backup_file)
-                
-                # 替换文件
+                    shutil.copy2(target, backup_file)
                 import shutil
-                shutil.move(message, APP_LOGIC_FILE)
+                shutil.move(message, target)
                 
                 # 显示成功消息
                 msg = QMessageBox()
@@ -160,7 +211,6 @@ def download_and_update(app, download_url, latest_version):
                 msg.setStandardButtons(QMessageBox.StandardButton.Ok)
                 msg.exec()
                 
-                # 重启程序
                 import subprocess
                 subprocess.Popen([sys.executable] + sys.argv)
                 sys.exit(0)
@@ -180,9 +230,124 @@ def download_and_update(app, download_url, latest_version):
     download_thread.start()
 
 
+def download_and_swap_exe(app, download_url, latest_version):
+    from PyQt6.QtWidgets import QProgressDialog
+    import tempfile
+    import subprocess
+    progress = QProgressDialog("正在下载新版本...", "取消", 0, 100, None)
+    progress.setWindowTitle("下载更新")
+    progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+    progress.setMinimumDuration(0)
+    progress.setValue(0)
+    progress.show()
+    temp_file = os.path.join(tempfile.gettempdir(), f"update_{latest_version}.exe")
+    def on_download_progress(percent):
+        progress.setValue(percent)
+    def on_download_finished(status, message):
+        progress.close()
+        dl.wait()
+        if status == "success":
+            try:
+                current_exe = sys.executable
+                new_path = current_exe + ".new"
+                import shutil
+                shutil.move(message, new_path)
+                script_path = os.path.join(tempfile.gettempdir(), "swap_update.ps1")
+                ps = (
+                    f"$old = '{current_exe.replace("'", "''")}'\n"
+                    f"$new = '{new_path.replace("'", "''")}'\n" 
+                    "while ($true) {\n"
+                    "  try { Move-Item -LiteralPath $new -Destination $old -Force; break }\n"
+                    "  catch { Start-Sleep -Milliseconds 500 }\n"
+                    "}\n"
+                    "Start-Process -FilePath $old\n"
+                )
+                with open(script_path, "w", encoding="utf-8") as f:
+                    f.write(ps)
+                subprocess.Popen([
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script_path
+                ])
+                sys.exit(0)
+            except Exception as e:
+                QMessageBox.critical(None, "更新失败", f"应用更新时出错:\n{e}")
+        else:
+            QMessageBox.warning(None, "下载失败", f"无法下载更新:\n{message}")
+    dl = DownloaderThread(download_url, temp_file)
+    dl.progress.connect(on_download_progress)
+    dl.finished.connect(on_download_finished)
+    app.download_exe_thread = dl
+    dl.start()
+
+def ensure_app_logic_available(app):
+    """当本地缺失 app_logic.py 时，自动从服务器获取并保存到本地（支持源码与打包版）"""
+    base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+    user_dir = os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'AutoRenamer')
+    os.makedirs(user_dir, exist_ok=True)
+    target_path = os.path.join(base_dir, APP_LOGIC_FILE)
+    # 若exe目录不可写则回退用户目录
+    def dir_writable(d):
+        try:
+            test = os.path.join(d, ".write_test")
+            with open(test, 'w', encoding='utf-8') as tf:
+                tf.write("ok")
+            os.remove(test)
+            return True
+        except Exception:
+            return False
+    if not dir_writable(base_dir):
+        target_path = os.path.join(user_dir, APP_LOGIC_FILE)
+    if os.path.exists(target_path):
+        return True
+
+    # 试图从最新发布获取 app_logic.py 资产
+    progress = QProgressDialog("正在获取核心文件...", "取消", 0, 100, None)
+    progress.setWindowTitle("下载核心文件")
+    progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+    progress.setMinimumDuration(0)
+    progress.setValue(0)
+    progress.show()
+
+    download_url = None
+    try:
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        proxies = get_system_proxies()
+        resp = requests.get(api_url, proxies=proxies, timeout=8)
+        if resp.ok:
+            data = resp.json()
+            for asset in data.get('assets', []):
+                if asset.get('name') == APP_LOGIC_FILE:
+                    download_url = asset.get('browser_download_url')
+                    break
+    except Exception:
+        pass
+
+    # 回退到主分支原始文件
+    if not download_url:
+        download_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{APP_LOGIC_FILE}"
+
+    def on_progress(p):
+        progress.setValue(p)
+
+    def on_finished(status, message):
+        progress.close()
+        dl.wait()
+        if status == "success" and os.path.exists(target_path):
+            QMessageBox.information(None, "下载完成", "核心文件已获取，正在启动程序。")
+            run_main_app()
+        else:
+            QMessageBox.critical(None, "下载失败", f"无法获取核心文件：\n{message}\n\n请稍后重试或手动下载。")
+            app.quit()
+
+    dl = DownloaderThread(download_url, target_path)
+    dl.progress.connect(on_progress)
+    dl.finished.connect(on_finished)
+    app.ensure_logic_thread = dl
+    dl.start()
+    return False
+
 def check_for_updates(app):
     """检查更新并显示提示"""
-    current_version = get_current_version_from_file(APP_LOGIC_FILE)
+    current_version = get_current_version()
 
     def on_update_check_result(result):
         if isinstance(result, Exception):
@@ -195,8 +360,9 @@ def check_for_updates(app):
         try:
             latest_version = result.get('tag_name', '')
             release_notes = result.get('body', '无更新说明')
-            
-            if latest_version and latest_version != current_version:
+            lv = normalize_version(latest_version)
+            cv = normalize_version(current_version)
+            if lv > cv:
                 # 有新版本可用
                 msg = QMessageBox()
                 msg.setWindowTitle("发现新版本")
@@ -209,23 +375,28 @@ def check_for_updates(app):
                 reply = msg.exec()
                 
                 if reply == QMessageBox.StandardButton.Yes:
-                    # 用户选择更新,查找下载链接
+                    import sys, webbrowser
                     assets = result.get('assets', [])
                     download_url = None
-                    
-                    # 查找app_logic.py文件
+                    sha_url = None
                     for asset in assets:
-                        if asset.get('name') == 'app_logic.py':
+                        name = asset.get('name', '')
+                        if name == 'app_logic.py':
                             download_url = asset.get('browser_download_url')
-                            break
-                    
-                    if download_url:
-                        download_and_update(app, download_url, latest_version)
-                    else:
-                        QMessageBox.warning(None, "无法更新", "未找到更新文件,请手动下载更新。\n\n将继续使用当前版本。")
-                        run_main_app()
+                        elif name == 'app_logic.sha256':
+                            sha_url = asset.get('browser_download_url')
+                    expected_sha = None
+                    try:
+                        if sha_url:
+                            resp_sha = requests.get(sha_url, timeout=5)
+                            if resp_sha.ok:
+                                expected_sha = resp_sha.text.strip().split()[0]
+                    except Exception:
+                        pass
+                    if not download_url:
+                        download_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/{APP_LOGIC_FILE}"
+                    download_and_update(app, download_url, latest_version, expected_sha)
                 else:
-                    # 用户选择稍后更新
                     run_main_app()
             else:
                 # 无更新,直接启动主程序
@@ -250,10 +421,13 @@ def main():
     """启动器主函数"""
     app = QApplication(sys.argv)
 
-    # 检查 app_logic.py 是否存在
-    if not os.path.exists(APP_LOGIC_FILE):
-        QMessageBox.critical(None, "文件缺失", f"核心逻辑文件 '{APP_LOGIC_FILE}' 不存在,程序无法启动。")
-        return
+    # 两种模式均支持：缺失时自动下载 app_logic.py
+    base_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
+    if not os.path.exists(os.path.join(base_dir, APP_LOGIC_FILE)):
+        if not ensure_app_logic_available(app):
+            # 进入事件循环以驱动下载线程，下载完成后自动启动主程序
+            sys.exit(app.exec())
+            return
 
     # 启动时检查更新
     check_for_updates(app)
